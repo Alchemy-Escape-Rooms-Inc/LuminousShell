@@ -1,72 +1,80 @@
+#include <WiFi.h>
 #include <PubSubClient.h>
-#include <Ethernet.h>
-#include <adafruit_vl53l0x.h>
+#include "Adafruit_VL53L0X.h"
+#include <FastLED.h>
+
+#define TOTAL_LEDS 10
 
 //************ GLOBAL VARIABLES **********
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
-Adafruit_VL53L0X dSensor = Adafruit_VL53L0X();
+Adafruit_VL53L0X sensor = Adafruit_VL53L0X();
+
+CRGB leds[TOTAL_LEDS];
 
 const char * ssid = "AlchemyGuest";
 const char * password = "VoodooVacation5601";
 const char * mqttServer = "10.1.10.115";
+const char * topic = "MermaidsTale/BlueShell";                  //topic for shell communication(subscription & publishing) on the broker
 
 const unsigned char triggerDistance = 50;
-
-const unsigned long lightUpDuration = 1000UL * 5; //5 seconds
-
-unsigned long triggerStartTime = 0;
+const unsigned long lightUpDuration = 1000UL * 10; //10 seconds
+unsigned long currentTime, lastTime;
 
 bool isTriggered = false;
 
 // *************** FUNCTIONS  *******************
-//MQTT & NETWORK
-void setup_wifi() {
-  delay(10);
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-
-  WiFi.begin(ssid, password);
-
-  int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 20) {
-    delay(500);
-    Serial.print(".");
-    retries++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWi-Fi connected!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\nFailed to connect to Wi-Fi");
-    Serial.print("WiFi.status() = ");
-    Serial.println(WiFi.status());
-  }
+//LED STRIP 
+void setup_led(){
+    FastLED.addLeds<WS2812B,4,GRB>(leds, TOTAL_LEDS);
+    FastLED.setBrightness(128);
 }
 
-void reconnect() {
-  while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    if (client.connect("ESP8266Client_01")) {
-      Serial.println("connected");
-      client.publish("MermaidsTale/Shell1", "Connected!");
-      client.subscribe("MermaidsTale/#");
+//TIME OF FLIGHT DISTANCE SENSOR
+void setup_sensor(){
+  if (!sensor.begin()) {
+    Serial.println(F("Failed to boot VL53L0X"));
+    while(1);
+  }
+}  
+  
+//WIFI NETWORK
+void setup_wifi() {
+  delay(1000);
+  Serial.println("*********** WIFI ***********");
+  Serial.print("\n Connecting to ");
+  Serial.print(ssid);
 
-      // Initial publish now that we're definitely connected
-      client.publish("MermaidsTale/Shell1", "Searching");
+  WiFi.begin(ssid,password);
+
+  while(WiFi.status() != WL_CONNECTED){
+    delay(100);
+    Serial.print("-");
+  }
+  Serial.println("\nConnected.");
+}
+
+//MQTT SERVER
+void reconnect() {
+  while (!mqtt.connected()) {
+    Serial.print("******** MQTT SERVER ********");
+    if (mqtt.connect("ESP32 WROOM")) {
+      Serial.print("Connection to broker established: ");
+      Serial.println(mqttServer);
+
+      mqtt.publish(topic, "Connected!");        //Message sent to broker, identifying the connected shell.
+      mqtt.subscribe(topic);                             //shell subscribing to the broker's topic
+
     } else {
       Serial.print("failed, rc=");
-      Serial.print(client.state());
+      Serial.print(mqtt.state());
       Serial.println(". Trying again in 5 seconds.");
       delay(5000);
     }
   }
 }
 
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+void callback(char* topic, byte* payload, unsigned int length) {
   String message = "";
   for (unsigned int i = 0; i < length; i++)
     message += (char)payload[i];
@@ -75,93 +83,113 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print(" = ");
   Serial.println(message);
 
-  if (strcmp(topic, "Shell1/command/lightUpShell") == 0) {
+  if (strcmp(topic, "BlueShell/lightUpShell") == 0) {
     lightUpShell();
-  } else if (strcmp(topic, "Shell1/command/turnOffShell") == 0) {
+  } else if (strcmp(topic, "BlueShell/turnOffShell") == 0) {
     turnOffShell();
-  }
+  } else if (strcmp(topic, "BlueShell/playSound") == 0) {
+    playSound();
+  } else if (strcmp(topic, "BlueShell/stopSound") == 0) {
+    stopSound();
+  } 
+
 }
 
-void publishStatus() {
-  if (!mqtt.connected())
-    return;
-  String summary = "";
-  mqtt.publish("Shell1/summary", summary.c_str());
-}
-
-void serverInit(){
-  setup_wifi();
+void setup_server(){
   mqtt.setServer(mqttServer, 1883);
-  mqtt.setCallback(mqttCallback);
+  mqtt.setCallback(callback);
 }
 
 //GENERAL FUNCTIONS
 void lightUpShell() {
-  digitalWrite(lightPin,HIGH);
-  mqtt.publish("Shell1", "LightingUp");
+  fill_solid(leds,TOTAL_LEDS,CRGB(255,255,255));
+  FastLED.show();
+  mqtt.publish(topic, "LightingUp");
+  Serial.println("Lighting up the blue shell.");
 }
 
 void turnOffShell() {
-  digitalWrite(lightPin,LOW);
-  mqtt.publish("Shell1", "TurnedOff");
+  fill_solid(leds,TOTAL_LEDS,CRGB::Black);
+  FastLED.show();
+  mqtt.publish(topic, "TurnedOff");
+  Serial.println("Turning off the blue shell.");
 }
 
 
+void playSound(){
+//depending on how the sound will be played, 
+//via mqtt command, 
+//wire running to speaker controller, etc...
+//add necessary code here
+//example below if publishing to another topic, 
+//which will trigger play sound 
+  mqtt.publish(topic,"Sound1/play");
+  Serial.println("Playing the sound.");
+}
+
+void stopSound(){
+  mqtt.publish(topic,"Sound1/stop");
+  Serial.println("Stop playing sound.");
+}
+
+void shellActivated(){
+  isTriggered = true;
+  lightUpShell();
+  playSound();
+}
+
+void shellDeactivated(){
+  isTriggered = false;
+  turnOffShell();
+  //stopSound();
+}
+
 void _init(){
-  Serial.begin(9600);
-  //lighPin setup
-  pinMode(lightPin,OUTPUT);
-  digitalWrite(lightPin,LOW);
-  //distance sensor initialization
-  if(dSensor.begin()){
-    Serial.println("Failed to initialize VL53L0X!");
-    while(1);
-  }
-  //establish network connection and mqtt setup
-  serverInit();
+  //FastLED setup
+  setup_led();
+  //ToF Distance Sensor Setup
+  setup_sensor();
+  //network setup
+  setup_wifi();
+  //mqtt setup
+  setup_server();
 }
 
 void program(){
-    if (!mqtt.connected()) {
-        reconnect();
+  if (!mqtt.connected()) {
+    reconnect();
+  }
+  mqtt.loop();
+
+  VL53L0X_RangingMeasurementData_t measure;
+  sensor.rangingTest(&measure, false); 
+
+  if(isTriggered){
+    currentTime = millis();
+    if(currentTime - lastTime > lightUpDuration){
+      isTriggered = false;
+      shellDeactivated();
     }
-    mqtt.loop();
+    return;
+  }
 
-    unsigned long currentTime = millis();
-
-    VL53L0X_RangingMeasurementData_t measure;
-    dSensor.rangingTest(&measure, false);
+  if (measure.RangeStatus != 4) {  
+    unsigned char distance = measure.RangeMilliMeter;
+    Serial.print("Distance (mm): "); 
+    Serial.println(distance);
+    if(triggerDistance  < distance)
+      shellActivated();
+    lastTime = millis();
+  } else {
+    Serial.println(" out of range ");
+  }
     
-    if(isTriggered)
-        return; 
-
-    if (measure.RangeStatus != 4) {
-        if (measure.RangeMilliMeter < triggerDistance) {
-            Serial.println("MermaidsTale/Shell1 triggered");
-            Serial.print("Distance (mm): ");
-            Serial.println(measure.RangeMilliMeter);
-            
-            lightUpShell();
-            client.loop(); // Ensure message gets sent
-            delay(500);
-
-            isTriggered = true;
-            triggerStartTime = currentTime;
-             
-        } else {
-            Serial.println("Out of range");
-        }
-    } else {
-        Serial.println("Out of range");
-    }
-
-    delay(100);
-
-
+  delay(1000);
 }
 
 // ***************** SETUP *********************
 void setup() {
+  Serial.begin(115200);
   _init();
 }
 
