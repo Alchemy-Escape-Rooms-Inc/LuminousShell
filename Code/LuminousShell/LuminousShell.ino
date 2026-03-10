@@ -4,6 +4,7 @@
 #include <FastLED.h>
 
 #define TOTAL_LEDS 10
+#define LED_PIN 4
 
 //************ GLOBAL VARIABLES **********
 WiFiClient espClient;
@@ -19,15 +20,14 @@ const char * topic = "MermaidsTale/BlueShell";                  //topic for shel
 
 const unsigned char triggerDistance = 50;
 const unsigned long lightUpDuration = 1000UL * 10; //10 seconds
-unsigned long currentTime, lastTime;
+unsigned long currentTime, startTime;
 
 bool isTriggered = false;
 
 // *************** FUNCTIONS  *******************
-//LED STRIP 
+//LED STRIP
 void setup_led(){
-    FastLED.addLeds<WS2812B,4,GRB>(leds, TOTAL_LEDS);
-    FastLED.setBrightness(128);
+  FastLED.addLeds<WS2812B,LED_PIN,GRB>(leds, TOTAL_LEDS);
 }
 
 //TIME OF FLIGHT DISTANCE SENSOR
@@ -36,14 +36,14 @@ void setup_sensor(){
     Serial.println(F("Failed to boot VL53L0X"));
     while(1);
   }
-}  
-  
+}
+
 //WIFI NETWORK
 void setup_wifi() {
   delay(1000);
   Serial.println("*********** WIFI ***********");
-  Serial.print("\n Connecting to ");
-  Serial.print(ssid);
+  Serial.print("Connecting to SSID: ");
+  Serial.println(ssid);
 
   WiFi.begin(ssid,password);
 
@@ -57,7 +57,7 @@ void setup_wifi() {
 //MQTT SERVER
 void reconnect() {
   while (!mqtt.connected()) {
-    Serial.print("******** MQTT SERVER ********");
+    Serial.println("******** MQTT SERVER ********");
     if (mqtt.connect("ESP32 WROOM")) {
       Serial.print("Connection to broker established: ");
       Serial.println(mqttServer);
@@ -91,7 +91,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     playSound();
   } else if (strcmp(topic, "BlueShell/stopSound") == 0) {
     stopSound();
-  } 
+  }
 
 }
 
@@ -102,9 +102,12 @@ void setup_server(){
 
 //GENERAL FUNCTIONS
 void lightUpShell() {
+  uint8_t brightness = beatsin8(15,20,255);
+  FastLED.setBrightness(brightness);
   fill_solid(leds,TOTAL_LEDS,CRGB(255,255,255));
   FastLED.show();
-  mqtt.publish(topic, "LightingUp");
+  mqtt.publish(topic, "Lighting up shell.");
+  mqtt.loop();
   Serial.println("Lighting up the blue shell.");
 }
 
@@ -112,23 +115,26 @@ void turnOffShell() {
   fill_solid(leds,TOTAL_LEDS,CRGB::Black);
   FastLED.show();
   mqtt.publish(topic, "TurnedOff");
+  mqtt.loop();
   Serial.println("Turning off the blue shell.");
 }
 
 
 void playSound(){
-//depending on how the sound will be played, 
-//via mqtt command, 
-//wire running to speaker controller, etc...
-//add necessary code here
-//example below if publishing to another topic, 
-//which will trigger play sound 
+  //depending on how the sound will be played,
+  //via mqtt command,
+  //wire running to speaker controller, etc...
+  //add necessary code here
+  //example below if publishing to another topic,
+  //which will trigger play sound
   mqtt.publish(topic,"Sound1/play");
+  mqtt.loop();
   Serial.println("Playing the sound.");
 }
 
 void stopSound(){
   mqtt.publish(topic,"Sound1/stop");
+  mqtt.loop();
   Serial.println("Stop playing sound.");
 }
 
@@ -161,30 +167,35 @@ void program(){
   }
   mqtt.loop();
 
-  VL53L0X_RangingMeasurementData_t measure;
-  sensor.rangingTest(&measure, false); 
-
   if(isTriggered){
+    lightUpShell();                   //must continue looping to have fade-IN (glow up) effect.
     currentTime = millis();
-    if(currentTime - lastTime > lightUpDuration){
+    if(currentTime - startTime > lightUpDuration){
       isTriggered = false;
       shellDeactivated();
     }
+    delay(100);
     return;
   }
 
-  if (measure.RangeStatus != 4) {  
+  VL53L0X_RangingMeasurementData_t measure;
+  sensor.rangingTest(&measure, false);
+  
+  if (measure.RangeStatus != 4) {
     unsigned char distance = measure.RangeMilliMeter;
-    Serial.print("Distance (mm): "); 
+    Serial.print("Distance (mm): ");
     Serial.println(distance);
-    if(triggerDistance  < distance)
+
+    if(triggerDistance  < distance){
       shellActivated();
-    lastTime = millis();
+      startTime = millis();
+    }
+
   } else {
     Serial.println(" out of range ");
   }
-    
-  delay(1000);
+
+  delay(250);
 }
 
 // ***************** SETUP *********************
